@@ -2,6 +2,7 @@ const express=require('express');
 const bodyParser = require('body-parser');
 require("dotenv").config();
 const { btoa } = require('abab');
+const axios = require('axios');
 const { CLIENT_ID, CLIENT_SECRET, REDIRECT_URI } = process.env;
 const PORT = process.env.PORT || 3000;
 const crypto = require('crypto');
@@ -61,6 +62,8 @@ app.get('/auth', (req, res) => {
       res.redirect('/?authenticated=true');
     } catch (error) {
       console.error('Error:', error.message);
+      console.error('Error Details:', error.response && error.response.data);  
+      console.error('Error:', error.message);
       res.status(500).send('An error occurred');
     }
   });
@@ -91,75 +94,68 @@ app.get('/auth', (req, res) => {
     });  
 
 
-  async function getAccessToken(authorizationCode) {
-    const response = await fetch('https://account-d.docusign.com/oauth/token', {
-      method: 'POST',
-      headers: {
-        Authorization: 'Basic ' + btoa(`${CLIENT_ID}:${CLIENT_SECRET}`),
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: `grant_type=authorization_code&code=${authorizationCode}&redirect_uri=${REDIRECT_URI}&code_verifier=${codeVerifier}`,
-    });
   
-    if (!response.ok) {
-        const errorDetails = await response.json();
-    console.error('Error Details:', errorDetails);
-      throw new Error(`Request failed with status code ${response.status}`);
-    }
-  
-    return await response.json();
-  }
 
-  async function getUserBaseURI(accessToken) {
-    const response = await fetch('https://account-d.docusign.com/oauth/userinfo', {
-      headers: {
-        Authorization: 'Bearer ' + accessToken,
-      },
+  async function getAccessToken(authorizationCode) {
+    const response = await axios.post('https://account-d.docusign.com/oauth/token', new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: authorizationCode,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: codeVerifier,
+      }), {
+        headers: {
+          Authorization: 'Basic ' + btoa(`${CLIENT_ID}:${CLIENT_SECRET}`),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
     });
   
-    if (!response.ok) {
-      throw new Error(`Request failed with status code ${response.status}`);
+    if (!response.status === 200) {
+        throw new Error(`Request failed with status code ${response.status}`);
     }
   
-    const userInfo = await response.json();
-    return {
-        baseURI: userInfo.accounts[0].base_uri,
-        accountId: userInfo.accounts[0].account_id,
-      };  }
+    return response.data;
+  }
   
+
   
+
+      async function getUserBaseURI(accessToken) {
+        const response = await axios.get('https://account-d.docusign.com/oauth/userinfo', {
+          headers: {
+            Authorization: 'Bearer ' + accessToken,
+          },
+        });
+      
+        const userInfo = response.data;
+        return {
+          baseURI: userInfo.accounts[0].base_uri,
+          accountId: userInfo.accounts[0].account_id,
+        };
+      }
+      
 
   async function createAndSendEnvelope(baseURI, accountId, accessToken, { templateId, email, name, roleName }) {
-    const response = await fetch(`${baseURI}/restapi/v2.1/accounts/${accountId}/envelopes`, {
-      method: 'POST',
+    const response = await axios.post(`${baseURI}/restapi/v2.1/accounts/${accountId}/envelopes`, {
+      templateId,
+      emailSubject: 'Sent from a Template',
+      templateRoles: [
+        {
+          email,
+          name,
+          roleName,
+          routingOrder: '1',
+        },
+      ],
+      status: 'sent',
+    }, {
       headers: {
         Authorization: 'Bearer ' + accessToken,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        templateId,
-        emailSubject: 'Sent from a Template',
-        templateRoles: [
-          {
-            email,
-            name,
-            roleName,
-            routingOrder: '1',
-          },
-        ],
-        status: 'sent',
-      }),
     });
   
-    if (!response.ok) {
-        const errorDetails = await response.json();
-        console.error('Error Details:', errorDetails);
-      throw new Error(`Request failed with status code ${response.status}`);
-    }
-  
-    return await response.json();
+    return response.data;
   }
-
   
   app.listen(PORT, () => {
     console.log(`Server started on port ${PORT}`);
